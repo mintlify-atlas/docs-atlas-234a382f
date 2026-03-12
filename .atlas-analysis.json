@@ -1,0 +1,64 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Weiroll",
+  "projectDescription": "A deployable, self-contained instance of Weiroll for on-chain runtime scripting on Ethereum",
+  "theme": "aspen",
+  "primaryColor": "#6366F1",
+  "lightColor": "#818CF8",
+  "darkColor": "#4F46E5",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get Started",
+        "pages": [
+          "introduction",
+          "quickstart"
+        ]
+      },
+      {
+        "group": "Architecture",
+        "pages": [
+          "architecture/overview",
+          "architecture/deployable-vm",
+          "architecture/security"
+        ]
+      },
+      {
+        "group": "Deployment",
+        "pages": [
+          "deployment/setup",
+          "deployment/deterministic-deployment",
+          "deployment/multi-chain"
+        ]
+      },
+      {
+        "group": "Integration",
+        "pages": [
+          "integration/usage",
+          "integration/delegate-call",
+          "integration/best-practices"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "reference/contract-api",
+          "reference/deployment-addresses",
+          "reference/foundry-configuration"
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Deterministic deployment using CREATE2 with empty salt",
+    "Delegate-call only execution for security",
+    "Multi-chain support (Ethereum, Optimism, Polygon, Arbitrum, Base, BSC, Avalanche, Gnosis)",
+    "Built on audited Enso Finance Weiroll VM",
+    "Gas-efficient on-chain scripting"
+  ],
+  "publicApiSurface": [
+    "DeployableVM.execute(bytes32[] commands, bytes[] state)",
+    "DeployableVM.WEIROLL_SINGLETON",
+    "DeployableVM.CallableOnlyViaDelegateCall()"
+  ]
+}
