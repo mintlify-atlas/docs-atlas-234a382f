@@ -1,0 +1,114 @@
+---
+title: "Introduction"
+description: "A deployable, self-contained instance of Weiroll for on-chain runtime scripting on Ethereum"
+---
+
+## What is Weiroll?
+
+Weiroll is a flexible execution system designed to enable trust-minimized and gas-efficient scripting on Ethereum. This deployable implementation provides a virtual machine (VM) that executes on-chain scripts composed of commands and state, enabling complex, multi-step operations to be executed atomically in a single transaction with minimal gas overhead.
+
+This repository wraps the audited [Enso Finance Weiroll VM](https://github.com/enso-finance/enso-weiroll) in a deployable contract that can be safely used by any protocol through delegatecall.
+
+## Why Weiroll?
+
+Traditional smart contract interactions often require multiple separate transactions to complete complex operations, leading to:
+
+- **High gas costs** from multiple transaction overheads
+- **Security risks** from intermediate states being exposed
+- **Poor user experience** requiring multiple wallet interactions
+- **Atomic execution challenges** where partial failures leave the system in an inconsistent state
+
+Weiroll solves these problems by providing a VM that can execute multiple operations atomically within a single transaction, all while maintaining security through its delegatecall-only design.
+
+## Key Benefits
+
+<CardGroup cols={2}>
+  <Card title="Deterministic Deployment" icon="fingerprint">
+    Deployed using CREATE2 with an empty salt, ensuring the same address across all supported chains. This makes integration predictable and simplifies multi-chain deployments.
+  </Card>
+  <Card title="Secure by Design" icon="shield-check">
+    Only callable via delegatecall to prevent direct execution and protect contract state. The DeployableVM cannot be called directly, ensuring safe integration.
+  </Card>
+  <Card title="Multi-Chain Support" icon="network-wired">
+    Available on Ethereum, Optimism, Polygon, Arbitrum, Base, BSC, Avalanche, and Gnosis Chain at the same deterministic address.
+  </Card>
+  <Card title="Gas Efficient" icon="gauge-high">
+    Optimized for minimal gas consumption with 1,000,000 optimizer runs and compiled via IR for maximum efficiency.
+  </Card>
+</CardGroup>
+
+## How It Works
+
+The DeployableVM contract is a thin wrapper around the Weiroll VM that enforces security constraints:
+
+```solidity
+contract DeployableVM is WeirollVM {
+    error CallableOnlyViaDelegateCall();
+
+    address private immutable WEIROLL_SINGLETON;
+
+    constructor() {
+        WEIROLL_SINGLETON = address(this);
+    }
+
+    function execute(bytes32[] calldata commands, bytes[] memory state) 
+        public payable returns (bytes[] memory) 
+    {
+        require(address(this) != WEIROLL_SINGLETON, CallableOnlyViaDelegateCall());
+        return _execute(commands, state);
+    }
+}
+```
+
+The immutable `WEIROLL_SINGLETON` address is set at deployment time to the contract's own address. When `execute()` is called:
+
+- **Via delegatecall**: `address(this)` is the caller's address, so the check passes ✓
+- **Direct call**: `address(this)` equals `WEIROLL_SINGLETON`, so the check fails ✗
+
+This ensures that Weiroll can only be used in the context of another contract's storage, never operating on its own state.
+
+## Built on Audited Code
+
+<Note>
+  This project leverages the security-audited Weiroll VM implementation from Enso Finance, which itself is based on the original [weiroll](https://github.com/weiroll/weiroll) project. The DeployableVM wrapper adds an additional security layer by enforcing delegatecall-only execution.
+</Note>
+
+## Deployment Addresses
+
+Weiroll is deployed at the same deterministic address across all supported networks:
+
+```
+0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963
+```
+
+**Supported networks:**
+- Ethereum Mainnet (Chain ID: 1)
+- Optimism (Chain ID: 10)
+- BSC (Chain ID: 56)
+- Gnosis Chain (Chain ID: 100)
+- Polygon (Chain ID: 137)
+- Arbitrum One (Chain ID: 42161)
+- Avalanche C-Chain (Chain ID: 43114)
+- Base (Chain ID: 8453)
+- Sepolia Testnet (Chain ID: 11155111)
+
+<Tip>
+  See the [Deployment Addresses](/reference/deployment-addresses) reference for transaction hashes and verification links.
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Integrate Weiroll into your Solidity contract in minutes
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture/overview">
+    Understand the VM's internal architecture and execution model
+  </Card>
+  <Card title="Contract API" icon="code" href="/reference/contract-api">
+    Explore the complete DeployableVM interface
+  </Card>
+  <Card title="Best Practices" icon="lightbulb" href="/integration/best-practices">
+    Learn security patterns and optimization techniques
+  </Card>
+</CardGroup>

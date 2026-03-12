@@ -1,0 +1,208 @@
+---
+title: "Using Weiroll in Your Contracts"
+description: "Learn how to integrate Weiroll execution into your Solidity contracts"
+---
+
+## Overview
+
+Weiroll executes scripts composed of commands and state through the `execute()` function. To use Weiroll in your contract, you'll call it via delegatecall, passing in the commands to execute and the state they operate on.
+
+## Basic Integration Pattern
+
+The core integration pattern involves three steps:
+
+1. Deploy or reference the DeployableVM contract
+2. Build your commands and state arrays
+3. Execute via delegatecall
+
+### Step 1: Reference the DeployableVM
+
+First, you need to know the address of the deployed DeployableVM contract on your target chain.
+
+```solidity
+contract MyContract {
+    address constant WEIROLL_VM = 0x...; // DeployableVM address
+    
+    // Your contract logic here
+}
+```
+
+<Tip>
+Find deployment addresses for all supported chains in the [Deployment Addresses](/reference/deployment-addresses) reference.
+</Tip>
+
+### Step 2: Build Commands and State
+
+Commands and state are the two core data structures you need to prepare:
+
+**Commands** (`bytes32[]`) - An array of encoded instructions that specify:
+- Which contract function to call
+- What parameters to use (from state or literal values)
+- Where to store the return value
+
+**State** (`bytes[]`) - An array of bytes containing:
+- Input values for commands
+- Space for storing intermediate results
+- Final output values
+
+```solidity
+function executeScript() external {
+    // Build commands array
+    bytes32[] memory commands = new bytes32[](2);
+    commands[0] = /* encoded command 1 */;
+    commands[1] = /* encoded command 2 */;
+    
+    // Build state array
+    bytes[] memory state = new bytes[](4);
+    state[0] = abi.encode(someValue);
+    state[1] = abi.encode(anotherValue);
+    // state[2] and state[3] reserved for outputs
+    
+    // Execute via delegatecall
+    (bool success, bytes memory result) = WEIROLL_VM.delegatecall(
+        abi.encodeCall(DeployableVM.execute, (commands, state))
+    );
+    
+    require(success, "Weiroll execution failed");
+    
+    // Decode the returned state
+    bytes[] memory finalState = abi.decode(result, (bytes[]));
+}
+```
+
+### Step 3: Execute via Delegatecall
+
+Weiroll **must** be called via delegatecall. This is enforced by the contract:
+
+```solidity /home/daytona/workspace/source/src/DeployableVM.sol:22-28
+function execute(bytes32[] calldata commands, bytes[] memory state) 
+    public 
+    payable 
+    returns (bytes[] memory) 
+{
+    require(address(this) != WEIROLL_SINGLETON, CallableOnlyViaDelegateCall());
+    return _execute(commands, state);
+}
+```
+
+<Warning>
+Direct calls to `execute()` will revert. Always use delegatecall.
+</Warning>
+
+## Complete Example
+
+Here's a complete example showing how to use Weiroll in a contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IDeployableVM {
+    function execute(
+        bytes32[] calldata commands, 
+        bytes[] memory state
+    ) external payable returns (bytes[] memory);
+}
+
+contract WeirollIntegration {
+    address constant WEIROLL_VM = 0x...; // Your chain's DeployableVM
+    
+    function runScript(
+        bytes32[] calldata commands,
+        bytes[] memory state
+    ) external payable returns (bytes[] memory) {
+        // Delegate execution to Weiroll VM
+        (bool success, bytes memory returnData) = WEIROLL_VM.delegatecall(
+            abi.encodeCall(IDeployableVM.execute, (commands, state))
+        );
+        
+        require(success, "Script execution failed");
+        
+        // Return the updated state
+        return abi.decode(returnData, (bytes[]));
+    }
+}
+```
+
+## Testing Your Integration
+
+When testing, verify both success and failure cases:
+
+```solidity /home/daytona/workspace/source/test/DeployableVM.t.sol:14-28
+function test_reverts_if_not_delegatecall() public {
+    bytes32[] memory commands = new bytes32[](0);
+    bytes[] memory state = new bytes[](0);
+
+    vm.expectRevert(DeployableVM.CallableOnlyViaDelegateCall.selector);
+    weiVm.execute(commands, state);
+}
+
+function test_callable_via_delegatecall() public {
+    bytes32[] memory commands = new bytes32[](0);
+    bytes[] memory state = new bytes[](0);
+
+    (bool success,) = address(weiVm).delegatecall(
+        abi.encodeCall(DeployableVM.execute, (commands, state))
+    );
+    assertTrue(success);
+}
+```
+
+<Note>
+Empty commands and state arrays are valid and useful for testing the integration without executing any operations.
+</Note>
+
+## Working with Return Values
+
+The `execute()` function returns the final state array after all commands have executed:
+
+```solidity
+function processResults(
+    bytes32[] calldata commands,
+    bytes[] memory state
+) external returns (uint256 result) {
+    (bool success, bytes memory returnData) = WEIROLL_VM.delegatecall(
+        abi.encodeCall(IDeployableVM.execute, (commands, state))
+    );
+    
+    require(success, "Execution failed");
+    
+    // Decode the state array
+    bytes[] memory finalState = abi.decode(returnData, (bytes[]));
+    
+    // Extract specific result from state
+    result = abi.decode(finalState[0], (uint256));
+}
+```
+
+## Handling Ether
+
+The `execute()` function is payable, allowing scripts to work with Ether:
+
+```solidity
+function executeWithEther(
+    bytes32[] calldata commands,
+    bytes[] memory state
+) external payable {
+    (bool success,) = WEIROLL_VM.delegatecall{
+        abi.encodeCall(IDeployableVM.execute, (commands, state))
+    };
+    
+    require(success, "Execution failed");
+}
+```
+
+<Tip>
+When using delegatecall, the Ether value is automatically forwarded. You don't need to specify the value explicitly.
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Delegatecall Pattern" icon="link" href="/integration/delegate-call">
+    Understand why delegatecall is required and how it works
+  </Card>
+  <Card title="Best Practices" icon="star" href="/integration/best-practices">
+    Learn security considerations and common patterns
+  </Card>
+</CardGroup>

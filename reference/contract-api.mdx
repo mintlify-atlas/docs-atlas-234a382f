@@ -1,0 +1,146 @@
+---
+title: 'Contract API'
+description: 'Complete API reference for the DeployableVM smart contract'
+---
+
+## Overview
+
+The `DeployableVM` contract provides a deployable wrapper around Weiroll's VM that can be used via delegatecall by arbitrary contracts. It extends the Enso Finance implementation of Weiroll VM.
+
+**Contract Source**: [DeployableVM.sol](https://github.com/cowdao-grants/weiroll/blob/main/src/DeployableVM.sol)
+
+**Inheritance**: Extends `WeirollVM` from [enso-weiroll](https://github.com/EnsoFinance/enso-weiroll)
+
+**License**: LGPL-3.0-or-later
+
+**Solidity Version**: ^0.8.27
+
+## Constructor
+
+```solidity
+constructor()
+```
+
+Initializes the contract by storing the singleton address. This address is used to prevent direct calls to the `execute` function.
+
+**Effects**:
+- Sets the immutable `WEIROLL_SINGLETON` variable to the deployed contract address
+
+## Functions
+
+### execute
+
+```solidity
+function execute(
+    bytes32[] calldata commands,
+    bytes[] memory state
+) public payable returns (bytes[] memory)
+```
+
+Executes a sequence of Weiroll commands. This function **must** be called via delegatecall from another contract.
+
+**Visibility**: `public`
+
+**State Mutability**: `payable`
+
+<ParamField path="commands" type="bytes32[] calldata" required>
+  Array of encoded Weiroll commands to execute. Each command is a packed bytes32 value containing:
+  - Target contract address
+  - Function selector
+  - Flags for call type and return handling
+  - Input and output indices into the state array
+</ParamField>
+
+<ParamField path="state" type="bytes[] memory" required>
+  Array of encoded values representing the execution state. This array contains:
+  - Input parameters for commands
+  - Storage slots for intermediate values
+  - Return values from executed commands
+</ParamField>
+
+<ResponseField name="return" type="bytes[] memory">
+  The final state array after all commands have been executed, containing the return values and modified state.
+</ResponseField>
+
+**Requirements**:
+- MUST be called via delegatecall (reverts with `CallableOnlyViaDelegateCall` if called directly)
+- The check verifies that `address(this) != WEIROLL_SINGLETON`
+
+**Behavior**:
+1. Validates the call is made via delegatecall
+2. Delegates to the internal `_execute` function from the parent `WeirollVM` contract
+3. Returns the modified state array
+
+**Example Usage**:
+
+```solidity
+// From within another contract
+bytes32[] memory commands = new bytes32[](1);
+bytes[] memory state = new bytes[](2);
+
+// Populate commands and state...
+
+(bool success, bytes memory result) = address(deployableVM).delegatecall(
+    abi.encodeCall(DeployableVM.execute, (commands, state))
+);
+
+if (success) {
+    bytes[] memory finalState = abi.decode(result, (bytes[]));
+    // Process results...
+}
+```
+
+**Security Note**: The delegatecall requirement is enforced as a security measure. With EIP-6780, the concern about `SELFDESTRUCT` is mitigated on supporting chains, but the check remains as a precaution for chains without EIP-6780 support.
+
+## Errors
+
+### CallableOnlyViaDelegateCall
+
+```solidity
+error CallableOnlyViaDelegateCall()
+```
+
+Thrown when the `execute` function is called directly instead of via delegatecall.
+
+**When thrown**:
+- Direct call to `execute` where `address(this) == WEIROLL_SINGLETON`
+
+**Resolution**:
+- Always call `execute` via delegatecall from another contract
+
+## Immutable Variables
+
+### WEIROLL_SINGLETON
+
+```solidity
+address private immutable WEIROLL_SINGLETON
+```
+
+**Type**: `address`
+
+**Visibility**: `private`
+
+**Description**: Stores the address of the deployed DeployableVM contract. Set during construction and used to detect whether the contract is being called directly or via delegatecall.
+
+**Usage**: If `address(this) == WEIROLL_SINGLETON`, the call is direct. If they differ, the call is via delegatecall.
+
+## Inherited Functionality
+
+DeployableVM inherits from `WeirollVM` which provides:
+
+- **Internal `_execute` function**: Core Weiroll command execution logic
+- **Command parsing and execution**: Decodes and executes packed command bytes
+- **State management**: Handles the state array manipulation during execution
+- **Call operations**: Supports various call types (call, delegatecall, staticcall)
+
+For detailed information about the Weiroll VM implementation, refer to:
+- [Enso Finance's Weiroll VM](https://github.com/EnsoFinance/enso-weiroll)
+- [Original Weiroll](https://github.com/weiroll/weiroll)
+
+## Gas Considerations
+
+The contract is compiled with:
+- **Via IR**: Enabled for better optimization
+- **Optimizer runs**: 1,000,000 (optimized for minimal execution cost)
+
+See [Foundry Configuration](/reference/foundry-configuration) for complete build settings.

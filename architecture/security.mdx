@@ -1,0 +1,286 @@
+---
+title: "Security Model"
+description: "Understanding Weiroll's security guarantees, delegatecall-only execution, and EIP-6780 considerations"
+---
+
+## Security Overview
+
+The DeployableVM is designed with security as a primary concern. The architecture enforces strict execution constraints that prevent misuse and ensure safe integration with any protocol.
+
+## Core Security Guarantees
+
+<CardGroup cols={2}>
+  <Card title="Delegatecall-Only" icon="shield-check">
+    The VM cannot be called directly, preventing unauthorized state access
+  </Card>
+  <Card title="Stateless Execution" icon="database">
+    The VM holds no state of its own, eliminating attack vectors
+  </Card>
+  <Card title="Caller Context" icon="user-shield">
+    All operations execute in the caller's context with their permissions
+  </Card>
+  <Card title="Audited Base" icon="certificate">
+    Built on Enso Finance's audited Weiroll VM implementation
+  </Card>
+</CardGroup>
+
+## Delegatecall-Only Execution
+
+### The Protection Mechanism
+
+The DeployableVM enforces that it can only be called via delegatecall:
+
+```solidity
+address private immutable WEIROLL_SINGLETON;
+
+constructor() {
+    WEIROLL_SINGLETON = address(this);
+}
+
+function execute(bytes32[] calldata commands, bytes[] memory state) 
+    public 
+    payable 
+    returns (bytes[] memory) 
+{
+    require(address(this) != WEIROLL_SINGLETON, CallableOnlyViaDelegateCall());
+    return _execute(commands, state);
+}
+```
+
+### How It Works
+
+**During deployment:**
+1. Constructor executes
+2. `WEIROLL_SINGLETON` is set to the deployed contract address
+3. This value is frozen as an immutable
+
+**When called directly:**
+1. `address(this)` equals `WEIROLL_SINGLETON`
+2. Require check fails
+3. Transaction reverts with `CallableOnlyViaDelegateCall` error
+
+**When called via delegatecall:**
+1. Code executes in caller's context
+2. `address(this)` equals caller's address (not VM's address)
+3. `address(this) != WEIROLL_SINGLETON` is true
+4. Execution proceeds normally
+
+<Info>
+**Why delegatecall matters:** When you delegatecall into the VM, the code executes in your contract's storage context. This means:
+- The VM cannot access or modify its own state
+- All operations use your contract's storage
+- The VM acts purely as executable code, not as a separate entity with state
+</Info>
+
+## Security Implications of Delegatecall
+
+### What Delegatecall Means for Security
+
+When your contract delegatecalls into the DeployableVM:
+
+```solidity
+// In your contract
+(bool success,) = address(weirollVM).delegatecall(
+    abi.encodeCall(DeployableVM.execute, (commands, state))
+);
+```
+
+The execution context is:
+
+| Property | Value | Implication |
+|----------|-------|-------------|
+| `address(this)` | Your contract | VM sees your address |
+| `msg.sender` | Original caller | VM inherits your msg.sender |
+| `msg.value` | Original value | VM has access to sent ETH |
+| Storage | Your storage | VM operates on your state |
+| Balance | Your balance | VM can spend your ETH |
+
+<Warning>
+**Critical Understanding:** Since the VM executes in your contract's context, it has full access to your contract's capabilities. Only execute commands you trust, as they run with your contract's full permissions.
+</Warning>
+
+### Trust Model
+
+The DeployableVM trust model requires:
+
+1. **Trust in the VM code:** The Weiroll VM implementation from Enso Finance is audited
+2. **Trust in commands:** You must trust the commands you execute
+3. **Trust in targets:** Commands call external contracts - you must trust those targets
+
+<Tip>
+**Best Practice:** Treat Weiroll commands like you would treat direct contract calls in your code. Only execute commands that call trusted contracts with validated parameters.
+</Tip>
+
+## EIP-6780 Considerations
+
+The contract includes specific considerations for [EIP-6780](https://eips.ethereum.org/EIPS/eip-6780), which changed how `SELFDESTRUCT` works:
+
+```solidity
+// With the event of EIP-6780, we no longer have to guard against `SELFDESTRUCT`,
+// but the following check is added out of an abundance of caution in the event
+// the contract is deployed on a chain that does not support EIP-6780.
+require(address(this) != WEIROLL_SINGLETON, CallableOnlyViaDelegateCall());
+```
+
+### Understanding EIP-6780
+
+**Before EIP-6780:**
+- `SELFDESTRUCT` could delete contract code and storage
+- A malicious direct call could potentially destroy the VM
+- This was a security risk for singleton contracts
+
+**After EIP-6780 (Cancun upgrade):**
+- `SELFDESTRUCT` only sends funds, doesn't delete code
+- Contract code and storage remain intact
+- The VM is protected even if `SELFDESTRUCT` is called
+
+### Cross-Chain Compatibility
+
+The delegatecall guard provides protection for:
+
+<Tabs>
+  <Tab title="Cancun-Compatible Chains">
+    Chains with EIP-6780 (Ethereum mainnet, most L2s after Cancun):
+    - `SELFDESTRUCT` is neutered
+    - Delegatecall guard provides defense-in-depth
+    - VM is fully protected
+  </Tab>
+  
+  <Tab title="Pre-Cancun Chains">
+    Chains without EIP-6780 (some L2s, private chains):
+    - `SELFDESTRUCT` retains original behavior
+    - Delegatecall guard is **critical** for security
+    - Prevents direct calls that could destroy the contract
+  </Tab>
+</Tabs>
+
+<Info>
+The delegatecall guard ensures the DeployableVM is secure on **all** chains, regardless of EIP-6780 support. This makes it safe to use the same deployed contract address across multiple networks.
+</Info>
+
+## Common Security Scenarios
+
+### Scenario 1: Attempting Direct Execution
+
+```solidity
+// ❌ This will FAIL
+DeployableVM vm = DeployableVM(VM_ADDRESS);
+vm.execute(commands, state); // Reverts with CallableOnlyViaDelegateCall
+```
+
+**Result:** Transaction reverts immediately. The VM cannot be called directly.
+
+### Scenario 2: Malicious Command in State
+
+```solidity
+// ⚠️ This executes but with YOUR permissions
+bytes32[] memory commands = getCommandsFromUser(); // Untrusted source
+(bool success,) = address(vm).delegatecall(
+    abi.encodeCall(DeployableVM.execute, (commands, state))
+);
+```
+
+**Risk:** Commands execute in your contract's context with full access to your state and balance.
+
+**Mitigation:** Validate commands before execution or only accept commands from trusted sources.
+
+### Scenario 3: Safe Usage Pattern
+
+```solidity
+// ✅ This is SAFE
+bytes32[] memory commands = buildTrustedCommands();
+(bool success, bytes memory result) = address(vm).delegatecall(
+    abi.encodeCall(DeployableVM.execute, (commands, state))
+);
+require(success, "Execution failed");
+```
+
+**Safety:** Commands are constructed by your contract logic and call only trusted targets.
+
+## Security Testing
+
+The test suite verifies the delegatecall enforcement:
+
+```solidity
+function test_reverts_if_not_delegatecall() public {
+    bytes32[] memory commands = new bytes32[](0);
+    bytes[] memory state = new bytes[](0);
+
+    vm.expectRevert(DeployableVM.CallableOnlyViaDelegateCall.selector);
+    weiVm.execute(commands, state);
+}
+
+function test_callable_via_delegatecall() public {
+    bytes32[] memory commands = new bytes32[](0);
+    bytes[] memory state = new bytes[](0);
+
+    (bool success,) = address(weiVm).delegatecall(
+        abi.encodeCall(DeployableVM.execute, (commands, state))
+    );
+    assertTrue(success);
+}
+```
+
+These tests ensure:
+- ✅ Direct calls are rejected
+- ✅ Delegatecalls are accepted
+- ✅ The guard works correctly in both scenarios
+
+## Security Best Practices
+
+When integrating the DeployableVM:
+
+<Steps>
+  <Step title="Always use delegatecall">
+    Never attempt to call the VM directly. Always use delegatecall from your contract.
+  </Step>
+  
+  <Step title="Validate command sources">
+    Only execute commands from trusted sources or that you've constructed yourself.
+  </Step>
+  
+  <Step title="Validate target contracts">
+    Ensure commands only call contracts you trust with your contract's full permissions.
+  </Step>
+  
+  <Step title="Handle failures gracefully">
+    Check the success return value and handle failures appropriately.
+  </Step>
+  
+  <Step title="Test thoroughly">
+    Test your integration with various command sequences and failure scenarios.
+  </Step>
+</Steps>
+
+## Audit Status
+
+The security foundation of DeployableVM:
+
+- **Base VM**: Enso Finance's Weiroll VM is professionally audited
+- **Wrapper**: The DeployableVM wrapper is minimal and transparent
+- **Open Source**: All code is open source and verifiable
+- **Deployment**: Uses deterministic CREATE2 deployment for address consistency
+
+<Info>
+The minimal wrapper approach reduces the attack surface. With only ~30 lines of code, the wrapper is easy to audit and verify.
+</Info>
+
+## Additional Resources
+
+<CardGroup cols={2}>
+  <Card title="Integration Best Practices" icon="book" href="/integration/best-practices">
+    Learn patterns for safe Weiroll integration
+  </Card>
+  
+  <Card title="Delegatecall Guide" icon="code" href="/integration/delegate-call">
+    Detailed guide on using delegatecall with the VM
+  </Card>
+  
+  <Card title="Source Code" icon="github" href="https://github.com/cowdao-grants/weiroll">
+    Review the complete source code
+  </Card>
+  
+  <Card title="Enso Finance VM" icon="external-link" href="https://github.com/EnsoFinance/enso-weiroll">
+    Explore the audited base implementation
+  </Card>
+</CardGroup>

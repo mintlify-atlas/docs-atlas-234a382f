@@ -1,0 +1,257 @@
+---
+title: 'Foundry Configuration'
+description: 'Build configuration and compiler settings for Weiroll'
+---
+
+## Overview
+
+The Weiroll project uses [Foundry](https://book.getfoundry.sh/) for smart contract development, testing, and deployment. The configuration is optimized for gas efficiency and deterministic deployments.
+
+## Configuration File
+
+The project's build settings are defined in `foundry.toml` at the root of the repository.
+
+## Default Profile
+
+### Directory Structure
+
+```toml
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+```
+
+<ParamField path="src" type="string" default="src">
+  Source directory containing Solidity contracts
+</ParamField>
+
+<ParamField path="out" type="string" default="out">
+  Output directory for compilation artifacts
+</ParamField>
+
+<ParamField path="libs" type="array" default='["lib"]'>
+  Array of library directories for dependencies
+</ParamField>
+
+## Compiler Settings
+
+Weiroll uses aggressive optimization settings to minimize gas costs:
+
+```toml
+via_ir = true
+optimizer = true
+optimizer_runs = 1000000
+solc = "0.8.27"
+```
+
+### Via IR Compilation
+
+<ParamField path="via_ir" type="boolean" default="true">
+  Enables compilation via the intermediate representation (IR). This provides:
+  - More powerful optimization passes
+  - Better gas optimization
+  - More uniform bytecode across different Solidity versions
+  - Longer compilation times but better runtime efficiency
+</ParamField>
+
+<Warning>
+  IR-based compilation can produce different bytecode than traditional compilation. Always test thoroughly when enabling this option.
+</Warning>
+
+### Optimizer Configuration
+
+<ParamField path="optimizer" type="boolean" default="true">
+  Enables the Solidity optimizer, which performs various optimizations on the bytecode to reduce gas costs.
+</ParamField>
+
+<ParamField path="optimizer_runs" type="number" default="1000000">
+  Number of times the code is expected to be executed. Higher values optimize for execution cost over deployment cost.
+  
+  - **Low values (200)**: Optimize for cheaper deployment
+  - **High values (1M+)**: Optimize for cheaper execution
+  
+  Weiroll uses `1000000` runs because:
+  - The contract is deployed once but executed many times
+  - Gas savings on execution are more valuable than deployment savings
+  - The contract is small, so deployment cost is less of a concern
+</ParamField>
+
+### Solidity Version
+
+<ParamField path="solc" type="string" default="0.8.27">
+  Specific Solidity compiler version. Using `0.8.27` provides:
+  - Latest optimization improvements
+  - Best security features
+  - Support for modern Solidity syntax
+  - EIP-6780 awareness for SELFDESTRUCT handling
+</ParamField>
+
+## Formatter Settings
+
+```toml
+[fmt]
+sort_imports = true
+```
+
+<ParamField path="sort_imports" type="boolean" default="true">
+  Automatically sorts import statements alphabetically when running `forge fmt`
+</ParamField>
+
+## Required Foundry Version
+
+<Warning>
+  **Important**: For deterministic deployments, you must use a specific Foundry toolchain version.
+</Warning>
+
+Even though deterministic deployment is used, different Foundry versions can generate different addresses. To ensure consistency with official deployments:
+
+```bash
+foundryup -C cb9dfae298fe0b5a5cdef2536955f50b8c7f0bf5
+```
+
+This locks Foundry to commit `cb9dfae298fe0b5a5cdef2536955f50b8c7f0bf5`, ensuring:
+- Consistent bytecode generation
+- Matching deployment addresses across chains
+- Reproducible builds
+
+## Build Commands
+
+### Compile Contracts
+
+```bash
+forge build
+```
+
+Compiles all contracts in the `src/` directory using the settings from `foundry.toml`.
+
+**Output**: Compilation artifacts are written to `out/`
+
+### Run Tests
+
+```bash
+forge test
+```
+
+Runs all test contracts in the `test/` directory.
+
+**Options**:
+- `-vvv`: Verbose output showing stack traces
+- `-vvvv`: Very verbose output including setup traces
+- `--gas-report`: Display gas usage for each test
+
+### Format Code
+
+```bash
+forge fmt
+```
+
+Formats all Solidity files according to the configured style settings.
+
+### Clean Build Artifacts
+
+```bash
+forge clean
+```
+
+Removes the `out/` directory and all compilation artifacts.
+
+## Deployment Configuration
+
+For deployment, several environment variables are required:
+
+```bash
+export ETHERSCAN_API_KEY='your-api-key-here'
+export PK='your-private-key-here'
+export ETH_RPC_URL='https://rpc.example.com'
+```
+
+### Verify Deterministic Address
+
+Before deploying, verify the expected address:
+
+```bash
+forge script 'script/DeployableVM.s.sol:DeployableVMScript' \
+  -vvvv \
+  --rpc-url "$ETH_RPC_URL" \
+  --private-key "$PK"
+```
+
+### Deploy and Verify
+
+```bash
+forge script 'script/DeployableVM.s.sol:DeployableVMScript' \
+  -vvvv \
+  --rpc-url "$ETH_RPC_URL" \
+  --private-key "$PK" \
+  --verify \
+  --broadcast
+```
+
+This will:
+1. Deploy the contract
+2. Verify the source code on the block explorer
+3. Save deployment artifacts to `broadcast/`
+
+## Dependencies
+
+The project uses Git submodules for dependencies:
+
+```bash
+lib/
+├── enso-weiroll/    # Enso Finance's Weiroll VM implementation
+└── forge-std/       # Foundry standard library for testing
+```
+
+To initialize submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+## Gas Optimization Results
+
+With the current configuration, the DeployableVM contract achieves:
+
+- **Minimal bytecode size**: Optimized for deployment across multiple chains
+- **Low execution cost**: Optimized for repeated delegatecall usage
+- **Efficient delegatecall check**: Minimal gas overhead for safety validation
+
+## Best Practices
+
+<Tip>
+  When forking or building on top of Weiroll:
+  - Use the same Foundry version for consistent results
+  - Keep `via_ir = true` for best optimization
+  - Adjust `optimizer_runs` based on your usage pattern
+  - Always test with the exact compiler settings you'll use in production
+</Tip>
+
+## Troubleshooting
+
+### Different Deployment Address
+
+If you're getting a different deployment address:
+1. Verify you're using the correct Foundry version
+2. Check that your `foundry.toml` matches the reference configuration
+3. Ensure all dependencies are at the correct versions
+
+### Compilation Errors
+
+If compilation fails:
+1. Run `forge clean` to clear artifacts
+2. Update submodules: `git submodule update --recursive`
+3. Verify Solidity version: `forge --version`
+
+### Slow Compilation
+
+IR-based compilation is slower than traditional compilation. For development:
+- Consider temporarily disabling `via_ir` for faster iteration
+- Re-enable before deployment and final testing
+- Use `forge build --force` to ensure clean rebuild
+
+## Additional Resources
+
+- [Foundry Book](https://book.getfoundry.sh/) - Complete Foundry documentation
+- [Solidity Compiler Options](https://docs.soliditylang.org/en/latest/using-the-compiler.html) - Compiler flags and settings
+- [Optimizer Details](https://docs.soliditylang.org/en/latest/internals/optimizer.html) - How the optimizer works

@@ -1,0 +1,193 @@
+---
+title: Deterministic Deployment
+description: Deploy Weiroll contracts to consistent addresses across chains using CREATE2
+---
+
+## Overview
+
+Weiroll uses CREATE2 for deterministic deployment, ensuring the contract deploys to the same address on every EVM-compatible chain. This enables predictable contract addresses and simplifies multi-chain integrations.
+
+## How CREATE2 Works
+
+CREATE2 calculates contract addresses deterministically using:
+
+```
+address = keccak256(0xff ++ deployerAddress ++ salt ++ keccak256(bytecode))[12:]
+```
+
+By using the same:
+- Deployer address (CREATE2 factory)
+- Salt value
+- Contract bytecode
+
+The deployment produces identical addresses across all chains.
+
+## Deployment Script
+
+The deployment is handled by a Foundry script at `script/DeployableVM.s.sol`:
+
+```solidity script/DeployableVM.s.sol
+// SPDX-License-Identifier: LGPL-3.0-or-later
+pragma solidity ^0.8.13;
+
+import {DeployableVM} from "../src/DeployableVM.sol";
+import {Script, console} from "forge-std/Script.sol";
+
+contract DeployableVMScript is Script {
+    DeployableVM public weiVm;
+
+    function setUp() public {}
+
+    function run() public {
+        vm.startBroadcast();
+
+        // Use deterministic salt to deploy the contract.
+        weiVm = new DeployableVM{salt: ""}();
+
+        vm.stopBroadcast();
+    }
+}
+```
+
+### Key Points
+
+- **Empty Salt**: The script uses an empty string `""` as the salt value
+- **CREATE2 Syntax**: The `{salt: ""}` syntax tells Foundry to use CREATE2 deployment
+- **Broadcast**: Transactions are wrapped in `vm.startBroadcast()` and `vm.stopBroadcast()`
+
+## Verify Deterministic Address
+
+Before deploying, verify that the deterministic address calculation is correct:
+
+<Steps>
+  <Step title="Run the script in simulation mode">
+    Execute the script without broadcasting to preview the deployment:
+
+    ```bash
+    forge script 'script/DeployableVM.s.sol:DeployableVMScript' \
+      -vvvv \
+      --rpc-url "$ETH_RPC_URL" \
+      --private-key "$PK"
+    ```
+
+    This simulates the deployment and shows the address that will be used.
+  </Step>
+
+  <Step title="Check the output">
+    The script will output the deterministic address. Verify it matches the expected address from `networks.json`:
+
+    ```
+    0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963
+    ```
+
+    This is the canonical DeployableVM address across all supported chains.
+  </Step>
+</Steps>
+
+<Note>
+  If the address doesn't match, ensure you're using the [correct Foundry version](/deployment/setup#install-foundry) and the same compiler settings.
+</Note>
+
+## Deploy the Contract
+
+Once you've verified the address, deploy and verify on the block explorer:
+
+```bash
+forge script 'script/DeployableVM.s.sol:DeployableVMScript' \
+  -vvvv \
+  --rpc-url "$ETH_RPC_URL" \
+  --private-key "$PK" \
+  --verify \
+  --broadcast
+```
+
+### Flags Explained
+
+<ResponseField name="-vvvv">
+  Verbose logging (4 levels) to see detailed transaction information
+</ResponseField>
+
+<ResponseField name="--rpc-url">
+  The RPC endpoint for the target network
+</ResponseField>
+
+<ResponseField name="--private-key">
+  The deployer's private key (pays gas fees)
+</ResponseField>
+
+<ResponseField name="--verify">
+  Automatically verify the contract on the block explorer after deployment
+</ResponseField>
+
+<ResponseField name="--broadcast">
+  Actually broadcast the transaction (without this, it only simulates)
+</ResponseField>
+
+## Deployment Artifacts
+
+After successful deployment, Foundry generates artifacts in the `broadcast/` directory:
+
+```
+broadcast/DeployableVM.s.sol/{chainId}/run-{timestamp}.json
+```
+
+Example deployment file structure:
+
+```json
+{
+  "transactions": [
+    {
+      "hash": "0x6e22d6584ebfad16a5d222ae5e52c901b8a2a90f4948e41fc573b4c3f37adbe7",
+      "transactionType": "CREATE2",
+      "contractName": "DeployableVM",
+      "contractAddress": "0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963",
+      "transaction": {
+        "from": "0x29104bb91ADA737a89393c78335e48fF4708727E",
+        "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+        "chainId": "0x1"
+      }
+    }
+  ],
+  "chain": 1,
+  "timestamp": 1728545914
+}
+```
+
+<Warning>
+  **Important**: Commit the deployment file to version control. This provides an auditable record of all deployments.
+</Warning>
+
+## CREATE2 Factory
+
+Foundry uses the canonical CREATE2 factory at:
+
+```
+0x4e59b44847b379578588920cA78FbF26c0B4956C
+```
+
+This factory is deployed on all major EVM chains and is used by Foundry's CREATE2 deployment feature.
+
+## Troubleshooting
+
+### Different Address Generated
+
+If you get a different address than expected:
+
+1. Verify you're using the correct Foundry version: `cb9dfae298fe0b5a5cdef2536955f50b8c7f0bf5`
+2. Check that compiler settings in `foundry.toml` match the original deployment
+3. Ensure the salt value is an empty string `""`
+
+### Deployment Already Exists
+
+If the contract is already deployed at the address:
+
+```
+Error: contract already deployed at 0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963
+```
+
+This is expected! The contract is already deployed on this chain. You can verify the existing deployment instead of redeploying.
+
+## Next Steps
+
+- Set up [multi-chain deployment](/deployment/multi-chain) to deploy across all supported networks
+- View [deployed addresses](/deployment/multi-chain#deployed-addresses) for all chains

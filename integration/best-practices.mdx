@@ -1,0 +1,527 @@
+---
+title: "Integration Best Practices"
+description: "Security considerations, common patterns, and recommendations for using Weiroll"
+---
+
+## Security First
+
+Weiroll executes arbitrary code in your contract's context via delegatecall. This power requires careful handling.
+
+### Only Execute Trusted Scripts
+
+The most critical rule: **never execute untrusted commands**.
+
+```solidity
+// ❌ DANGEROUS: User-controlled commands
+function executeDangerous(
+    bytes32[] calldata userCommands,
+    bytes[] memory state
+) external {
+    // Attacker could drain funds, corrupt storage, etc.
+    WEIROLL_VM.delegatecall(
+        abi.encodeCall(DeployableVM.execute, (userCommands, state))
+    );
+}
+
+// ✅ SAFE: Pre-defined trusted commands
+function executeSafe(uint256 amount) external {
+    bytes32[] memory commands = buildTrustedScript(amount);
+    bytes[] memory state = new bytes[](5);
+    
+    WEIROLL_VM.delegatecall(
+        abi.encodeCall(DeployableVM.execute, (commands, state))
+    );
+}
+```
+
+<Warning>
+Executing user-provided commands is equivalent to giving users arbitrary code execution in your contract. This can lead to complete loss of funds.
+</Warning>
+
+### Control Command Sources
+
+If you must support dynamic scripts, use a whitelist approach:
+
+```solidity
+contract SafeScriptExecutor {
+    mapping(bytes32 => bool) public approvedScripts;
+    address public admin;
+    
+    function approveScript(
+        bytes32[] calldata commands
+    ) external onlyAdmin {
+        bytes32 scriptHash = keccak256(abi.encode(commands));
+        approvedScripts[scriptHash] = true;
+    }
+    
+    function executeApproved(
+        bytes32[] calldata commands,
+        bytes[] memory state
+    ) external {
+        bytes32 scriptHash = keccak256(abi.encode(commands));
+        require(approvedScripts[scriptHash], "Script not approved");
+        
+        WEIROLL_VM.delegatecall(
+            abi.encodeCall(DeployableVM.execute, (commands, state))
+        );
+    }
+}
+```
+
+## Access Control
+
+Implement proper access controls on functions that execute Weiroll scripts:
+
+```solidity
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract ControlledExecutor is Ownable {
+    address constant WEIROLL_VM = 0x...;
+    
+    // Only owner can execute scripts
+    function executeOwnerOnly(
+        bytes32[] calldata commands,
+        bytes[] memory state
+    ) external onlyOwner returns (bytes[] memory) {
+        (bool success, bytes memory returnData) = WEIROLL_VM.delegatecall(
+            abi.encodeCall(DeployableVM.execute, (commands, state))
+        );
+        
+        require(success, "Execution failed");
+        return abi.decode(returnData, (bytes[]));
+    }
+}
+```
+
+<Tip>
+Consider using role-based access control (RBAC) for more complex permission systems.
+</Tip>
+
+## Gas Optimization
+
+### Pre-size State Arrays
+
+Allocate the exact state array size you need:
+
+```solidity
+// ✅ Efficient: sized correctly
+function executeEfficient() external {
+    bytes32[] memory commands = new bytes32[](3);
+    bytes[] memory state = new bytes[](5); // Exactly what we need
+    
+    // Build commands and state
+    // ...
+    
+    WEIROLL_VM.delegatecall(
+        abi.encodeCall(DeployableVM.execute, (commands, state))
+    );
+}
+
+// ❌ Wasteful: oversized
+function executeWasteful() external {
+    bytes[] memory state = new bytes[](100); // Too large
+    // ...
+}
+```
+
+### Use calldata for Input Parameters
+
+When passing commands that don't need to be modified:
+
+```solidity
+// ✅ Gas efficient: calldata for read-only data
+function execute(
+    bytes32[] calldata commands,  // calldata
+    bytes[] memory state          // memory (will be modified)
+) external returns (bytes[] memory) {
+    (bool success, bytes memory returnData) = WEIROLL_VM.delegatecall(
+        abi.encodeCall(DeployableVM.execute, (commands, state))
+    );
+    
+    require(success, "Execution failed");
+    return abi.decode(returnData, (bytes[]));
+}
+```
+
+## Error Handling
+
+### Always Check Success
+
+Never ignore the success boolean from delegatecall:
+
+```solidity
+// ❌ Wrong: ignoring success
+function executeBad() external {
+    WEIROLL_VM.delegatecall(
+        abi.encodeCall(DeployableVM.execute, (commands, state))
+    );
+    // Continues even if execution failed!
+}
+
+// ✅ Correct: checking success
+function executeGood() external {
+    (bool success, bytes memory returnData) = WEIROLL_VM.delegatecall(
+        abi.encodeCall(DeployableVM.execute, (commands, state))
+    );
+    
+    require(success, "Weiroll execution failed");
+    // Now safe to proceed
+}
+```
+
+### Provide Context in Errors
+
+Make debugging easier with descriptive error messages:
+
+```solidity
+error ScriptExecutionFailed(string reason);
+error InvalidScriptResult(uint256 expected, uint256 actual);
+
+function executeWithGoodErrors(
+    bytes32[] calldata commands,
+    bytes[] memory state
+) external returns (uint256) {
+    (bool success, bytes memory returnData) = WEIROLL_VM.delegatecall(
+        abi.encodeCall(DeployableVM.execute, (commands, state))
+    );
+    
+    if (!success) {
+        revert ScriptExecutionFailed("Delegatecall failed");
+    }
+    
+    bytes[] memory finalState = abi.decode(returnData, (bytes[]));
+    uint256 result = abi.decode(finalState[0], (uint256));
+    
+    if (result < 100) {
+        revert InvalidScriptResult(100, result);
+    }
+    
+    return result;
+}
+```
+
+## Testing Patterns
+
+### Test Both Success and Failure
+
+Comprehensive tests cover both paths:
+
+```solidity
+contract WeirollIntegrationTest is Test {
+    DeployableVM public weirollVM;
+    MyContract public myContract;
+    
+    function setUp() public {
+        weirollVM = new DeployableVM();
+        myContract = new MyContract(address(weirollVM));
+    }
+    
+    function test_successful_execution() public {
+        bytes32[] memory commands = buildValidCommands();
+        bytes[] memory state = new bytes[](3);
+        
+        bytes[] memory result = myContract.execute(commands, state);
+        
+        // Assert expected results
+        assertEq(result.length, 3);
+    }
+    
+    function test_reverts_on_direct_call() public {
+        bytes32[] memory commands = new bytes32[](0);
+        bytes[] memory state = new bytes[](0);
+        
+        vm.expectRevert(DeployableVM.CallableOnlyViaDelegateCall.selector);
+        weirollVM.execute(commands, state);
+    }
+    
+    function test_handles_failed_script() public {
+        bytes32[] memory badCommands = buildFailingCommands();
+        bytes[] memory state = new bytes[](3);
+        
+        vm.expectRevert("Execution failed");
+        myContract.execute(badCommands, state);
+    }
+}
+```
+
+### Use Foundry's Fuzzing
+
+Test with various inputs:
+
+```solidity
+function testFuzz_state_handling(
+    uint256 value1,
+    uint256 value2
+) public {
+    vm.assume(value1 < type(uint128).max);
+    vm.assume(value2 < type(uint128).max);
+    
+    bytes32[] memory commands = buildCommands();
+    bytes[] memory state = new bytes[](3);
+    state[0] = abi.encode(value1);
+    state[1] = abi.encode(value2);
+    
+    bytes[] memory result = myContract.execute(commands, state);
+    
+    // Assert invariants hold for any valid input
+    uint256 output = abi.decode(result[2], (uint256));
+    assertLe(output, value1 + value2);
+}
+```
+
+## Common Patterns
+
+### Pattern: Stateless Script Executor
+
+For contracts that only execute scripts without maintaining state:
+
+```solidity
+contract StatelessExecutor {
+    address immutable WEIROLL_VM;
+    
+    constructor(address _weirollVM) {
+        WEIROLL_VM = _weirollVM;
+    }
+    
+    function execute(
+        bytes32[] calldata commands,
+        bytes[] memory state
+    ) external payable returns (bytes[] memory) {
+        (bool success, bytes memory returnData) = WEIROLL_VM.delegatecall(
+            abi.encodeCall(DeployableVM.execute, (commands, state))
+        );
+        
+        require(success, "Execution failed");
+        return abi.decode(returnData, (bytes[]));
+    }
+}
+```
+
+### Pattern: Script Library
+
+Pre-define reusable scripts:
+
+```solidity
+library Scripts {
+    function swapAndStake(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn
+    ) internal pure returns (
+        bytes32[] memory commands,
+        bytes[] memory state
+    ) {
+        commands = new bytes32[](2);
+        state = new bytes[](4);
+        
+        // Build swap command
+        commands[0] = /* encode swap */;
+        
+        // Build stake command  
+        commands[1] = /* encode stake */;
+        
+        // Initialize state
+        state[0] = abi.encode(tokenIn);
+        state[1] = abi.encode(tokenOut);
+        state[2] = abi.encode(amountIn);
+        
+        return (commands, state);
+    }
+}
+
+contract ScriptUser {
+    using Scripts for *;
+    
+    function swapAndStake(
+        address tokenIn,
+        address tokenOut,
+        uint256 amount
+    ) external {
+        (bytes32[] memory commands, bytes[] memory state) = 
+            Scripts.swapAndStake(tokenIn, tokenOut, amount);
+            
+        WEIROLL_VM.delegatecall(
+            abi.encodeCall(DeployableVM.execute, (commands, state))
+        );
+    }
+}
+```
+
+### Pattern: Reentrancy Protection
+
+Protect against reentrancy during script execution:
+
+```solidity
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+contract ProtectedExecutor is ReentrancyGuard {
+    address constant WEIROLL_VM = 0x...;
+    
+    function execute(
+        bytes32[] calldata commands,
+        bytes[] memory state
+    ) external nonReentrant returns (bytes[] memory) {
+        (bool success, bytes memory returnData) = WEIROLL_VM.delegatecall(
+            abi.encodeCall(DeployableVM.execute, (commands, state))
+        );
+        
+        require(success, "Execution failed");
+        return abi.decode(returnData, (bytes[]));
+    }
+}
+```
+
+## Deployment Checklist
+
+Before deploying a contract that uses Weiroll:
+
+- [ ] Verified the correct DeployableVM address for your chain
+- [ ] Implemented access controls on execute functions
+- [ ] Added proper error handling for failed executions
+- [ ] Tested with both empty and non-empty scripts
+- [ ] Verified delegatecall is used (not regular call)
+- [ ] Checked that only trusted scripts can be executed
+- [ ] Added reentrancy protection if needed
+- [ ] Tested gas consumption with realistic scripts
+- [ ] Documented what scripts your contract supports
+- [ ] Verified on testnet before mainnet deployment
+
+## Storage Safety
+
+Be aware of how scripts interact with your storage:
+
+```solidity
+contract StorageAware {
+    // Slot 0
+    uint256 public criticalValue;
+    
+    // Slot 1  
+    address public owner;
+    
+    // Slot 2
+    bool public initialized;
+    
+    function execute() external {
+        // Scripts executed here can read/write these storage slots
+        // Make sure your scripts don't accidentally overwrite them
+        WEIROLL_VM.delegatecall(...);
+    }
+}
+```
+
+<Warning>
+If a script writes to storage slots used by your contract variables, it can corrupt your state. Only execute scripts you fully trust and understand.
+</Warning>
+
+## Multi-Chain Considerations
+
+Weiroll is deployed on multiple chains with the same address:
+
+```solidity
+contract MultiChainExecutor {
+    // Same address on all supported chains
+    address constant WEIROLL_VM = 0x...;
+    
+    function execute(
+        bytes32[] calldata commands,
+        bytes[] memory state
+    ) external returns (bytes[] memory) {
+        // This works identically on all chains
+        (bool success, bytes memory returnData) = WEIROLL_VM.delegatecall(
+            abi.encodeCall(DeployableVM.execute, (commands, state))
+        );
+        
+        require(success);
+        return abi.decode(returnData, (bytes[]));
+    }
+}
+```
+
+<Tip>
+Use the same contract code across chains since DeployableVM has deterministic addresses.
+</Tip>
+
+## Reference Implementation
+
+Here's a complete reference implementation following all best practices:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+interface IDeployableVM {
+    function execute(
+        bytes32[] calldata commands,
+        bytes[] memory state
+    ) external payable returns (bytes[] memory);
+}
+
+contract BestPracticeExecutor is Ownable, ReentrancyGuard {
+    address public immutable WEIROLL_VM;
+    
+    event ScriptExecuted(bytes32 indexed scriptHash, address indexed executor);
+    
+    error ExecutionFailed(string reason);
+    error InvalidScript();
+    
+    constructor(address _weirollVM) {
+        require(_weirollVM != address(0), "Invalid VM address");
+        WEIROLL_VM = _weirollVM;
+    }
+    
+    function execute(
+        bytes32[] calldata commands,
+        bytes[] memory state
+    ) 
+        external 
+        payable
+        onlyOwner 
+        nonReentrant 
+        returns (bytes[] memory) 
+    {
+        // Validate inputs
+        if (commands.length == 0) revert InvalidScript();
+        
+        // Execute via delegatecall
+        (bool success, bytes memory returnData) = WEIROLL_VM.delegatecall(
+            abi.encodeCall(IDeployableVM.execute, (commands, state))
+        );
+        
+        // Handle failure
+        if (!success) {
+            revert ExecutionFailed("Weiroll execution failed");
+        }
+        
+        // Decode results
+        bytes[] memory finalState = abi.decode(returnData, (bytes[]));
+        
+        // Emit event
+        emit ScriptExecuted(
+            keccak256(abi.encode(commands)),
+            msg.sender
+        );
+        
+        return finalState;
+    }
+}
+```
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Usage Guide" icon="book" href="/integration/usage">
+    Complete integration guide
+  </Card>
+  <Card title="Delegatecall Deep Dive" icon="link" href="/integration/delegate-call">
+    Understanding the delegatecall pattern
+  </Card>
+  <Card title="Contract API" icon="code" href="/reference/contract-api">
+    Full API reference
+  </Card>
+  <Card title="Security" icon="shield" href="/architecture/security">
+    Security architecture and considerations
+  </Card>
+</CardGroup>

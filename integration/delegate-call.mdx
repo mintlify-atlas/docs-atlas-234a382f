@@ -1,0 +1,296 @@
+---
+title: "Understanding Delegatecall"
+description: "Why Weiroll requires delegatecall and how it preserves your contract's context"
+---
+
+## Why Delegatecall?
+
+Weiroll **must** be called via delegatecall rather than a regular call. This is a fundamental design requirement that ensures scripts execute within your contract's context, not the VM's context.
+
+### The Problem with Regular Calls
+
+A regular call executes code in the target contract's context:
+
+```solidity
+// ❌ This will revert
+WEIROLL_VM.execute(commands, state);
+```
+
+If Weiroll were called this way:
+- Storage operations would affect the VM's storage, not yours
+- `msg.sender` would be your contract, not the original caller
+- The VM contract would need to manage state for every caller
+
+### How Delegatecall Solves This
+
+With delegatecall, code from the VM executes in **your contract's context**:
+
+```solidity
+// ✅ This works correctly
+WEIROLL_VM.delegatecall(
+    abi.encodeCall(DeployableVM.execute, (commands, state))
+);
+```
+
+This means:
+- Storage reads/writes affect **your contract's storage**
+- `msg.sender` is preserved as the original caller
+- `msg.value` is the value sent to your contract
+- `address(this)` is your contract's address
+
+## The Delegatecall Safety Check
+
+Weiroll enforces delegatecall-only execution with a runtime check:
+
+```solidity /home/daytona/workspace/source/src/DeployableVM.sol:14-29
+error CallableOnlyViaDelegateCall();
+
+address private immutable WEIROLL_SINGLETON;
+
+constructor() {
+    WEIROLL_SINGLETON = address(this);
+}
+
+function execute(bytes32[] calldata commands, bytes[] memory state) 
+    public 
+    payable 
+    returns (bytes[] memory) 
+{
+    require(address(this) != WEIROLL_SINGLETON, CallableOnlyViaDelegateCall());
+    return _execute(commands, state);
+}
+```
+
+### How the Check Works
+
+1. **During deployment**: The constructor saves the VM's address to `WEIROLL_SINGLETON`
+2. **During execution**: The function checks if `address(this)` equals `WEIROLL_SINGLETON`
+3. **If equal**: It's a direct call → revert
+4. **If different**: It's a delegatecall → proceed
+
+<Note>
+With delegatecall, `address(this)` is the calling contract's address, not the VM's address.
+</Note>
+
+## Context Preservation Example
+
+Here's what happens in each context:
+
+```solidity
+contract MyContract {
+    uint256 public myValue;
+    
+    function runWeiroll() external {
+        // In this delegatecall:
+        // - address(this) = MyContract's address
+        // - msg.sender = the user who called runWeiroll()
+        // - Storage writes go to MyContract's storage
+        
+        (bool success,) = WEIROLL_VM.delegatecall(
+            abi.encodeCall(DeployableVM.execute, (commands, state))
+        );
+    }
+}
+```
+
+### Visual Comparison
+
+<CodeGroup>
+
+```solidity Regular Call (Won't Work)
+User → MyContract.run()
+        ↓ call
+      VM.execute()
+      Context:
+      - address(this) = VM address
+      - msg.sender = MyContract
+      - Storage = VM storage ❌
+```
+
+```solidity Delegatecall (Correct)
+User → MyContract.run()
+        ↓ delegatecall
+      VM.execute() code runs
+      Context:
+      - address(this) = MyContract address ✓
+      - msg.sender = User ✓
+      - Storage = MyContract storage ✓
+```
+
+</CodeGroup>
+
+## Security Implications
+
+The delegatecall pattern has important security implications:
+
+### 1. Storage Layout Must Be Careful
+
+Since the VM executes in your storage context, be aware of storage slots:
+
+```solidity
+contract MyContract {
+    // Slot 0: your variable
+    uint256 public myData;
+    
+    function runScript() external {
+        // The script sees your storage layout
+        // Commands that write to storage affect YOUR storage
+        WEIROLL_VM.delegatecall(...);
+    }
+}
+```
+
+<Warning>
+Carefully control what commands you execute. Malicious commands could overwrite your storage.
+</Warning>
+
+### 2. Only Execute Trusted Scripts
+
+Because scripts run with full access to your contract's storage and context:
+
+```solidity
+// ❌ Dangerous: executing arbitrary user-provided scripts
+function executeUntrusted(
+    bytes32[] calldata commands,
+    bytes[] memory state
+) external {
+    WEIROLL_VM.delegatecall(
+        abi.encodeCall(DeployableVM.execute, (commands, state))
+    );
+}
+
+// ✅ Safe: only executing pre-approved scripts
+function executeTrusted() external {
+    bytes32[] memory trustedCommands = buildTrustedScript();
+    bytes[] memory state = new bytes[](10);
+    
+    WEIROLL_VM.delegatecall(
+        abi.encodeCall(DeployableVM.execute, (trustedCommands, state))
+    );
+}
+```
+
+### 3. Reentrancy Considerations
+
+Delegatecall preserves your contract's reentrancy context:
+
+```solidity
+contract MyContract {
+    bool private locked;
+    
+    modifier nonReentrant() {
+        require(!locked, "Reentrant call");
+        locked = true;
+        _;
+        locked = false;
+    }
+    
+    function runScript() external nonReentrant {
+        // The reentrancy lock is preserved during execution
+        WEIROLL_VM.delegatecall(...);
+    }
+}
+```
+
+<Tip>
+Your existing reentrancy guards work correctly with Weiroll because delegatecall preserves your contract's state.
+</Tip>
+
+## EIP-6780 and SELFDESTRUCT
+
+The contract includes a comment about EIP-6780:
+
+```solidity /home/daytona/workspace/source/src/DeployableVM.sol:23-26
+// With the event of EIP-6780, we no longer have to guard against `SELFDESTRUCT`,
+// but the following check is added out of an abundance of caution in the event
+// the contract is deployed on a chain that does not support EIP-6780.
+require(address(this) != WEIROLL_SINGLETON, CallableOnlyViaDelegateCall());
+```
+
+<Note>
+EIP-6780 (activated in the Cancun upgrade) limits SELFDESTRUCT to only work within the same transaction as contract creation. This means the delegatecall check provides defense-in-depth even on newer chains.
+</Note>
+
+## Practical Integration
+
+Here's a complete example showing proper delegatecall usage:
+
+```solidity /home/daytona/workspace/source/test/DeployableVM.t.sol:22-28
+function test_callable_via_delegatecall() public {
+    bytes32[] memory commands = new bytes32[](0);
+    bytes[] memory state = new bytes[](0);
+
+    (bool success,) = address(weiVm).delegatecall(
+        abi.encodeCall(DeployableVM.execute, (commands, state))
+    );
+    assertTrue(success);
+}
+```
+
+## Testing Delegatecall Behavior
+
+Always test that your integration properly uses delegatecall:
+
+```solidity
+contract MyContractTest is Test {
+    MyContract public myContract;
+    DeployableVM public vm;
+    
+    function test_proper_delegatecall() public {
+        // This should work
+        myContract.executeScript();
+    }
+    
+    function test_direct_call_reverts() public {
+        bytes32[] memory commands = new bytes32[](0);
+        bytes[] memory state = new bytes[](0);
+        
+        // Direct call should revert
+        vm.expectRevert(DeployableVM.CallableOnlyViaDelegateCall.selector);
+        vm.execute(commands, state);
+    }
+}
+```
+
+## Common Pitfalls
+
+### Forgetting to Use Delegatecall
+
+```solidity
+// ❌ Wrong - regular call will revert
+(bool success,) = WEIROLL_VM.call(
+    abi.encodeCall(DeployableVM.execute, (commands, state))
+);
+
+// ✅ Correct - delegatecall
+(bool success,) = WEIROLL_VM.delegatecall(
+    abi.encodeCall(DeployableVM.execute, (commands, state))
+);
+```
+
+### Not Handling Delegatecall Return Values
+
+```solidity
+// ❌ Wrong - ignoring return data
+WEIROLL_VM.delegatecall(
+    abi.encodeCall(DeployableVM.execute, (commands, state))
+);
+
+// ✅ Correct - checking success and decoding return data
+(bool success, bytes memory returnData) = WEIROLL_VM.delegatecall(
+    abi.encodeCall(DeployableVM.execute, (commands, state))
+);
+require(success, "Execution failed");
+bytes[] memory finalState = abi.decode(returnData, (bytes[]));
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Usage Guide" icon="book" href="/integration/usage">
+    Learn the complete integration pattern
+  </Card>
+  <Card title="Best Practices" icon="shield-check" href="/integration/best-practices">
+    Security considerations and common patterns
+  </Card>
+</CardGroup>

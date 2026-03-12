@@ -1,0 +1,122 @@
+---
+title: 'Deployment Addresses'
+description: 'Official deployment addresses for DeployableVM across all supported chains'
+---
+
+## Overview
+
+The DeployableVM contract is deployed using deterministic deployment across multiple EVM-compatible chains. The addresses listed below are the official deployments maintained by the CoW Protocol team.
+
+<Note>
+  All deployments use the same address across chains where possible, ensuring consistent integration.
+</Note>
+
+## Deployed Contracts
+
+### DeployableVM
+
+| Chain | Chain ID | Address | Transaction Hash |
+|-------|----------|---------|------------------|
+| Ethereum Mainnet | 1 | `0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963` | [0x6e22d658...](https://etherscan.io/tx/0x6e22d6584ebfad16a5d222ae5e52c901b8a2a90f4948e41fc573b4c3f37adbe7) |
+| Optimism | 10 | `0x9585c3062df1c247d5e373cfca9167f7dc2b5963` | [0x71e3384a...](https://optimistic.etherscan.io/tx/0x71e3384a0d565f141647004d13f317a5047b1304f85774ab4a5a36a8e5170063) |
+| BNB Smart Chain | 56 | `0x9585c3062df1c247d5e373cfca9167f7dc2b5963` | [0xc9d8adc8...](https://bscscan.com/tx/0xc9d8adc83c0c9b4291c16485df474455f3e88e6e1f5c69410f15cc5e9f9df7c6) |
+| Gnosis Chain | 100 | `0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963` | [0xb22e5bed...](https://gnosisscan.io/tx/0xb22e5bedb95ed7c97308326c14b4ad9211a4f3d433839c0145ba233c402f07c1) |
+| Polygon | 137 | `0x9585c3062df1c247d5e373cfca9167f7dc2b5963` | [0xd1a743be...](https://polygonscan.com/tx/0xd1a743be2a13e767c1349edb0f9316504130e764d605fd150c4fd69b25a072d6) |
+| Base | 8453 | `0x9585c3062df1c247d5e373cfca9167f7dc2b5963` | [0xe4de4c19...](https://basescan.org/tx/0xe4de4c19b497233a337dd00b51543cd148fad25e86378a2d0d1f54e7e06cf00c) |
+| Sepolia Testnet | 11155111 | `0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963` | [0x5d873b89...](https://sepolia.etherscan.io/tx/0x5d873b89646e5b7947242ad3ef1e5b32394c6277b31162127e7a87356afb347e) |
+| Arbitrum One | 42161 | `0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963` | [0xf873b1ec...](https://arbiscan.io/tx/0xf873b1ec29c2f57f18f99ce8762624bc1c82a0ca8a91bd64cf94af92254f41b8) |
+| Avalanche C-Chain | 43114 | `0x9585c3062df1c247d5e373cfca9167f7dc2b5963` | [0x6a5b9739...](https://snowtrace.io/tx/0x6a5b973914929e0bc4019ee1a9aab99cfbcf1630722c663365459e88bcbf65c1) |
+
+## Using the Addresses
+
+To interact with DeployableVM on any supported chain:
+
+### Solidity
+
+```solidity
+interface IDeployableVM {
+    function execute(
+        bytes32[] calldata commands,
+        bytes[] memory state
+    ) external payable returns (bytes[] memory);
+}
+
+// Replace with the address for your target chain
+address constant DEPLOYABLE_VM = 0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963;
+
+function executeWeiroll(
+    bytes32[] memory commands,
+    bytes[] memory state
+) internal returns (bytes[] memory) {
+    (bool success, bytes memory result) = DEPLOYABLE_VM.delegatecall(
+        abi.encodeCall(IDeployableVM.execute, (commands, state))
+    );
+    require(success, "Weiroll execution failed");
+    return abi.decode(result, (bytes[]));
+}
+```
+
+### TypeScript / ethers.js
+
+```typescript
+import { ethers } from 'ethers';
+
+const DEPLOYABLE_VM_ADDRESS = '0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963';
+
+const deployableVM = new ethers.Contract(
+  DEPLOYABLE_VM_ADDRESS,
+  ['function execute(bytes32[] calldata commands, bytes[] memory state) external payable returns (bytes[] memory)'],
+  signer
+);
+
+// Note: You must call this via delegatecall from your contract
+```
+
+### Foundry
+
+In your Foundry project:
+
+```solidity
+import {DeployableVM} from "weiroll/DeployableVM.sol";
+
+contract MyContract {
+    DeployableVM constant vm = DeployableVM(0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963);
+    
+    function myFunction() external {
+        bytes32[] memory commands;
+        bytes[] memory state;
+        
+        // ... prepare commands and state
+        
+        (bool success, bytes memory result) = address(vm).delegatecall(
+            abi.encodeCall(vm.execute, (commands, state))
+        );
+    }
+}
+```
+
+## Verification
+
+All deployments are verified on their respective block explorers. You can view the source code and verification status by visiting the transaction hash link or searching for the contract address on the chain's block explorer.
+
+## Networks JSON
+
+The deployment addresses are maintained in the [`networks.json`](https://github.com/cowprotocol/weiroll/blob/main/networks.json) file in the repository. This file is programmatically generated from deployment artifacts.
+
+<Tip>
+  Import this file directly in your application to automatically use the correct address for each chain.
+</Tip>
+
+## Adding New Chains
+
+To request deployment on a new chain, please [open an issue](https://github.com/cowprotocol/weiroll) on the GitHub repository.
+
+## Deterministic Deployment
+
+All contracts are deployed using Foundry's deterministic deployment feature with specific toolchain version:
+
+```bash
+foundryup -C cb9dfae298fe0b5a5cdef2536955f50b8c7f0bf5
+```
+
+This ensures consistent addresses across chains where possible. See the [deployment guide](/deployment/deterministic-deployment) for more details.

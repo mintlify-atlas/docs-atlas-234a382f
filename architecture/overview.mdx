@@ -1,0 +1,158 @@
+---
+title: "Architecture Overview"
+description: "Understanding the Weiroll VM architecture and execution model"
+---
+
+## Introduction
+
+Weiroll is a flexible execution system that provides a virtual machine (VM) for executing on-chain scripts on Ethereum. At its core, Weiroll enables complex, multi-step operations to be executed atomically in a single transaction with minimal gas overhead.
+
+This implementation wraps the audited [Enso Finance Weiroll VM](https://github.com/EnsoFinance/enso-weiroll) in a deployable contract that can be safely used by any protocol through delegatecall.
+
+## High-Level Architecture
+
+The Weiroll system consists of three main components:
+
+<CardGroup cols={3}>
+  <Card title="Commands" icon="terminal">
+    Encoded operations that define what functions to call and in what order
+  </Card>
+  <Card title="State" icon="database">
+    Dynamic storage for intermediate values and return data between command executions
+  </Card>
+  <Card title="VM Executor" icon="microchip">
+    The core engine that interprets commands and manages state during execution
+  </Card>
+</CardGroup>
+
+## The Command and State Model
+
+Weiroll's architecture revolves around two key concepts:
+
+### Commands
+
+Commands are encoded as `bytes32` values that contain:
+- **Target contract address**: The contract to call
+- **Function selector**: Which function to invoke
+- **Flags**: Control flow indicators (call type, return value handling)
+- **Input indices**: References to values in the state array
+
+This compact encoding allows for efficient storage and execution of complex operation sequences.
+
+### State Array
+
+The state is a dynamic `bytes[]` array that serves as:
+- **Input storage**: Initial parameters for the first commands
+- **Intermediate storage**: Return values from executed commands
+- **Output storage**: Final results after all commands complete
+
+Commands reference state slots by index, allowing return values from one command to be used as inputs to subsequent commands.
+
+## Execution Flow
+
+The VM executes commands in sequence:
+
+<Steps>
+  <Step title="Initialize State">
+    The caller provides initial state array with input parameters
+  </Step>
+  
+  <Step title="Decode Command">
+    VM decodes the next `bytes32` command to extract target, function, and parameters
+  </Step>
+  
+  <Step title="Load Parameters">
+    VM loads parameter values from state array using encoded indices
+  </Step>
+  
+  <Step title="Execute Call">
+    VM performs the external call (or delegatecall) to the target contract
+  </Step>
+  
+  <Step title="Store Results">
+    Return values are stored back into the state array for use by subsequent commands
+  </Step>
+  
+  <Step title="Repeat">
+    Process continues until all commands are executed
+  </Step>
+</Steps>
+
+## Key Design Principles
+
+### Gas Efficiency
+
+Weiroll is optimized for minimal gas consumption:
+- Commands are tightly packed into `bytes32` values
+- State array reuses slots to minimize storage
+- Direct calls avoid unnecessary proxy overhead
+- Compiled with 1,000,000 optimizer runs
+
+### Atomicity
+
+All commands execute in a single transaction:
+- Either all commands succeed, or the entire transaction reverts
+- No partial state changes are possible
+- Provides strong consistency guarantees
+
+### Composability
+
+The VM enables arbitrary contract compositions:
+- Any contract function can be called
+- Return values can be chained between calls
+- Complex workflows can be expressed declaratively
+
+## DeployableVM Wrapper
+
+The `DeployableVM` contract adds a security layer around the base Weiroll VM:
+
+```solidity
+contract DeployableVM is WeirollVM {
+    error CallableOnlyViaDelegateCall();
+
+    address private immutable WEIROLL_SINGLETON;
+
+    constructor() {
+        WEIROLL_SINGLETON = address(this);
+    }
+
+    function execute(bytes32[] calldata commands, bytes[] memory state) 
+        public 
+        payable 
+        returns (bytes[] memory) 
+    {
+        require(address(this) != WEIROLL_SINGLETON, CallableOnlyViaDelegateCall());
+        return _execute(commands, state);
+    }
+}
+```
+
+This wrapper enforces that the VM can only be called via `delegatecall`, ensuring:
+- The VM executes in the caller's context
+- The VM cannot modify its own state
+- Calls are made with the caller's permissions and storage
+
+<Info>
+The delegatecall-only pattern is critical for security. It prevents direct execution that could manipulate the VM's state and ensures all operations occur in the calling contract's context.
+</Info>
+
+## Comparison to Other Execution Models
+
+| Feature | Weiroll VM | Regular Calls | Multicall |
+|---------|-----------|---------------|------------|
+| **State Sharing** | Yes, via state array | No | No |
+| **Gas Efficiency** | High (compact encoding) | Standard | Good |
+| **Atomicity** | Full transaction atomicity | Per-call | Transaction level |
+| **Composability** | High (chain outputs) | Limited | Medium |
+| **Complexity** | Requires encoding | Simple | Medium |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="DeployableVM Deep Dive" icon="code" href="/architecture/deployable-vm">
+    Explore the implementation details of the DeployableVM contract
+  </Card>
+  <Card title="Security Model" icon="shield-check" href="/architecture/security">
+    Understand the security guarantees and considerations
+  </Card>
+</CardGroup>

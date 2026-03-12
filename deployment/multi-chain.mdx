@@ -1,0 +1,246 @@
+---
+title: Multi-Chain Deployment
+description: Deploy Weiroll across multiple EVM chains with consistent addresses
+---
+
+## Overview
+
+Weiroll is deployed to multiple EVM-compatible chains using CREATE2, ensuring the same contract address on every network. This simplifies integration for multi-chain applications.
+
+## Supported Networks
+
+Weiroll is officially deployed on the following networks:
+
+| Network | Chain ID | Address |
+|---------|----------|----------|
+| Ethereum Mainnet | 1 | `0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963` |
+| Optimism | 10 | `0x9585c3062df1c247d5e373cfca9167f7dc2b5963` |
+| BNB Smart Chain | 56 | `0x9585c3062df1c247d5e373cfca9167f7dc2b5963` |
+| Gnosis Chain | 100 | `0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963` |
+| Polygon | 137 | `0x9585c3062df1c247d5e373cfca9167f7dc2b5963` |
+| Arbitrum One | 42161 | `0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963` |
+| Avalanche C-Chain | 43114 | `0x9585c3062df1c247d5e373cfca9167f7dc2b5963` |
+| Base | 8453 | `0x9585c3062df1c247d5e373cfca9167f7dc2b5963` |
+| Sepolia Testnet | 11155111 | `0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963` |
+
+<Note>
+  Notice that the address is identical (or differs only in case) across all chains due to CREATE2 deterministic deployment.
+</Note>
+
+## Deploy to a New Chain
+
+To deploy Weiroll to a new EVM-compatible chain:
+
+<Steps>
+  <Step title="Configure RPC endpoint">
+    Set the RPC URL for the target network:
+
+    ```bash
+    export ETH_RPC_URL='https://rpc.newchain.example.com'
+    ```
+  </Step>
+
+  <Step title="Fund deployer account">
+    Ensure your deployer account has sufficient native tokens for gas fees on the target chain.
+  </Step>
+
+  <Step title="Verify deterministic address">
+    Simulate the deployment to confirm the address:
+
+    ```bash
+    forge script 'script/DeployableVM.s.sol:DeployableVMScript' \
+      -vvvv \
+      --rpc-url "$ETH_RPC_URL" \
+      --private-key "$PK"
+    ```
+
+    Verify the output address matches the canonical address:
+    ```
+    0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963
+    ```
+  </Step>
+
+  <Step title="Deploy and verify">
+    Deploy the contract and verify on the block explorer:
+
+    ```bash
+    forge script 'script/DeployableVM.s.sol:DeployableVMScript' \
+      -vvvv \
+      --rpc-url "$ETH_RPC_URL" \
+      --private-key "$PK" \
+      --verify \
+      --broadcast
+    ```
+
+    <Note>
+      For non-Etherscan explorers, you may need to omit `--verify` and verify manually later.
+    </Note>
+  </Step>
+
+  <Step title="Commit deployment artifact">
+    After successful deployment, commit the generated deployment file:
+
+    ```bash
+    git add broadcast/DeployableVM.s.sol/{chainId}/run-*.json
+    git commit -m "Deploy to {chain_name} (chain ID {chainId})"
+    ```
+
+    This creates an auditable record of the deployment.
+  </Step>
+
+  <Step title="Update networks.json">
+    Generate the updated networks file with all deployments:
+
+    ```bash
+    bash dev/generate-networks-file.sh > networks.json
+    ```
+
+    Commit the updated file:
+
+    ```bash
+    git add networks.json
+    git commit -m "Update networks.json with {chain_name} deployment"
+    ```
+  </Step>
+</Steps>
+
+## Networks File
+
+The `networks.json` file contains all official deployments indexed by contract name and chain ID:
+
+```json networks.json
+{
+  "DeployableVM": {
+    "1": {
+      "address": "0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963",
+      "transactionHash": "0x6e22d6584ebfad16a5d222ae5e52c901b8a2a90f4948e41fc573b4c3f37adbe7"
+    },
+    "10": {
+      "address": "0x9585c3062df1c247d5e373cfca9167f7dc2b5963",
+      "transactionHash": "0x71e3384a0d565f141647004d13f317a5047b1304f85774ab4a5a36a8e5170063"
+    }
+  }
+}
+```
+
+### Generate Networks File
+
+The networks file is automatically generated from deployment artifacts using a bash script:
+
+```bash
+bash dev/generate-networks-file.sh > networks.json
+```
+
+This script:
+
+1. Scans all deployment files in `broadcast/DeployableVM.s.sol/*/run-*.json`
+2. Extracts CREATE2 transactions with contract addresses and transaction hashes
+3. Merges all deployments into a single JSON object indexed by chain ID
+4. Sorts the output by chain ID and contract name
+
+### Script Details
+
+The `generate-networks-file.sh` script uses `jq` to process deployment artifacts:
+
+```bash dev/generate-networks-file.sh
+#!/bin/bash
+
+set -o errexit -o pipefail -o nounset
+
+repo_root_dir="$(git rev-parse --show-toplevel)"
+
+for deployment in "$repo_root_dir/broadcast/"*"/"*"/"*".json"; do
+  # The subfolder name is the chain id
+  chain_id=${deployment%/*}
+  chain_id=${chain_id##*/}
+
+  # Format each deployment as a single-chain networks.json entry
+  jq --arg chainId "$chain_id" '
+    .transactions[]
+    | select(.transactionType == "CREATE2")
+    | select(.hash != null)
+    | {(.contractName): {($chainId): {address: .contractAddress, transactionHash: .hash }}}
+  '  <"$deployment"
+done \
+  | # Merge all entries together
+    jq --sort-keys --null-input 'reduce inputs as $item ({}; . *= $item)'
+```
+
+## Network-Specific Considerations
+
+### Gas Fees
+
+Deployment gas costs vary by network:
+
+- **Ethereum Mainnet**: ~1-2M gas (expensive, $50-200+ depending on gas price)
+- **Layer 2s (Optimism, Arbitrum, Base)**: Very low cost ($0.10-1)
+- **Sidechains (Polygon, BSC)**: Low cost ($0.01-0.10)
+- **Avalanche**: Moderate cost ($1-5)
+
+### Block Explorer Verification
+
+<AccordionGroup>
+  <Accordion title="Etherscan-based explorers">
+    Most networks use Etherscan-based explorers. Set the appropriate API key:
+
+    ```bash
+    export ETHERSCAN_API_KEY='your_api_key'
+    ```
+
+    Supported networks:
+    - Ethereum (etherscan.io)
+    - Polygon (polygonscan.com)
+    - BSC (bscscan.com)
+    - Arbitrum (arbiscan.io)
+    - Optimism (optimistic.etherscan.io)
+    - Base (basescan.org)
+    - Avalanche (snowtrace.io)
+  </Accordion>
+
+  <Accordion title="Other explorers">
+    For non-Etherscan explorers like Gnosis Chain (Blockscout), you may need to:
+
+    1. Deploy without `--verify`
+    2. Manually verify using the explorer's UI
+    3. Upload flattened source code and compiler settings
+  </Accordion>
+</AccordionGroup>
+
+## Integration with Multi-Chain Apps
+
+To integrate Weiroll in a multi-chain application:
+
+```typescript
+import networks from './networks.json';
+
+const DEPLOYABLE_VM_ADDRESS = networks.DeployableVM[chainId]?.address;
+
+if (!DEPLOYABLE_VM_ADDRESS) {
+  throw new Error(`DeployableVM not deployed on chain ${chainId}`);
+}
+
+// Use DEPLOYABLE_VM_ADDRESS for your integration
+```
+
+The consistent address across chains simplifies multi-chain deployments:
+
+```typescript
+// This works on all supported chains
+const WEIROLL_VM = '0x9585c3062Df1C247d5E373Cfca9167F7dC2b5963';
+```
+
+## Deployed Addresses
+
+For the most up-to-date list of deployed addresses, refer to the [`networks.json`](https://github.com/cowprotocol/weiroll/blob/main/networks.json) file in the Weiroll repository.
+
+You can also query deployment details programmatically:
+
+```bash
+curl -s https://raw.githubusercontent.com/cowprotocol/weiroll/main/networks.json | jq
+```
+
+## Next Steps
+
+- Learn about [deterministic deployment](/deployment/deterministic-deployment) with CREATE2
+- Review [environment setup](/deployment/setup) for deploying to new chains
+- Start [building with Weiroll](/quickstart) on your deployed instance

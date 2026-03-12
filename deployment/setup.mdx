@@ -1,0 +1,106 @@
+---
+title: Environment Setup
+description: Set up your development environment for deploying Weiroll contracts
+---
+
+## Prerequisites
+
+Before deploying Weiroll contracts, you need to set up your development environment with the correct toolchain and dependencies.
+
+## Install Foundry
+
+<Warning>
+  **Critical**: Weiroll requires a specific Foundry version to maintain deterministic deployment addresses across chains. Using a different version will generate different addresses.
+</Warning>
+
+Install the exact Foundry toolchain version required for deterministic deployment:
+
+```bash
+foundryup -C cb9dfae298fe0b5a5cdef2536955f50b8c7f0bf5
+```
+
+This specific commit ensures that the CREATE2 deployment generates consistent addresses across all networks.
+
+## Build Configuration
+
+Weiroll uses optimized compiler settings for gas efficiency. The configuration in `foundry.toml` includes:
+
+```toml foundry.toml
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+
+# Compiler settings
+via_ir = true
+optimizer = true
+optimizer_runs = 1000000
+solc = "0.8.27"
+```
+
+### Key Settings
+
+- **via_ir**: Enables IR-based code generation for better optimization
+- **optimizer_runs**: Set to 1,000,000 for maximum gas efficiency in production
+- **solc**: Solidity compiler version 0.8.27
+
+## Environment Variables
+
+Create environment variables for deployment. These credentials are required for deploying and verifying contracts:
+
+```bash
+export PK='your_private_key_here'
+export ETH_RPC_URL='https://rpc.node.url.example.com'
+export ETHERSCAN_API_KEY='your_api_key_here'
+```
+
+<ParamField path="PK" type="string" required>
+  The private key of the deployer account. This account will pay for gas fees.
+</ParamField>
+
+<ParamField path="ETH_RPC_URL" type="string" required>
+  The RPC endpoint URL for the network you're deploying to.
+</ParamField>
+
+<ParamField path="ETHERSCAN_API_KEY" type="string">
+  API key for block explorer verification. Required only for Etherscan-based explorers.
+</ParamField>
+
+<Warning>
+  Never commit private keys or API keys to version control. Use environment variables or a secure secrets manager.
+</Warning>
+
+## Build the Project
+
+Once Foundry is installed, build the contracts:
+
+```bash
+forge build
+```
+
+This compiles the contracts with the optimized settings and prepares them for deployment.
+
+## Run Tests
+
+Verify that everything is working correctly by running the test suite:
+
+```bash
+forge test
+```
+
+All tests should pass before proceeding with deployment.
+
+## Format Code
+
+If you've made any changes to the contracts, format them according to the project standards:
+
+```bash
+forge fmt
+```
+
+## Next Steps
+
+With your environment set up, you're ready to:
+
+- Learn about [deterministic deployment](/deployment/deterministic-deployment) using CREATE2
+- Deploy to [multiple chains](/deployment/multi-chain) with consistent addresses
